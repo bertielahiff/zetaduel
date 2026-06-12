@@ -100,6 +100,9 @@
   .btab{background:transparent;border:1px solid var(--line);color:var(--dim);font-size:11.5px;letter-spacing:.1em;padding:6px 15px;border-radius:999px;transition:all .15s}
   .btab:hover{color:var(--ink)}
   .btab.active{border-color:var(--green);color:var(--green)}
+  .livedot{display:none;width:8px;height:8px;border-radius:50%;background:var(--red);margin-left:8px;vertical-align:1px}
+  .livedot.on{display:inline-block;animation:livepulse 1.2s ease infinite}
+  @keyframes livepulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(240,106,93,.55)}50%{opacity:.55;box-shadow:0 0 0 6px rgba(240,106,93,0)}}
   table.lb{width:100%;border-collapse:collapse;font-size:13.5px}
   table.lb th{font-size:9.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--faint);font-weight:500;text-align:left;padding:7px 9px;border-bottom:1px solid var(--line)}
   table.lb td{padding:8px 9px;border-bottom:1px solid rgba(39,49,61,.55);font-family:var(--mono)}
@@ -280,6 +283,8 @@
         <label class="f">Your name <span style="color:var(--amber)">*</span></label>
         <input class="ti" id="playerName" maxlength="24" placeholder="e.g. PRIYA" style="text-transform:uppercase" required>
         <button class="btn" id="btnSolo">Solo sprint</button>
+        <button class="btn gold" id="btnDaily">Daily challenge</button>
+        <p class="hint" id="dailyStatus" style="margin-top:7px"></p>
         <button class="btn amber" id="btnCreate">Create a challenge for colleagues</button>
         <div class="codebox" id="codeBox">
           <div class="cb-label">Challenge code — send this to your colleagues</div>
@@ -324,9 +329,10 @@
       <h2>Leaderboard</h2>
       <div class="board-tabs" id="boardTabs">
         <button class="btab active" data-tab="all">All scores</button>
-        <button class="btab" data-tab="challenge">This challenge</button>
-        <button class="btab" data-tab="session">This session</button>
-        <button class="btab" data-tab="live">Live now</button>
+        <button class="btab" data-tab="daily">Daily challenge</button>
+        <button class="btab" data-tab="today">Daily scores</button>
+        <button class="btab" data-tab="activity">Most plays</button>
+        <button class="btab" data-tab="live">Live now<span class="livedot" id="liveDot"></span></button>
       </div>
       <div id="boardBody"></div>
       <div id="boardByType"></div>
@@ -818,7 +824,7 @@
     $('hudScore').textContent='0';
     $('hudTimer').textContent=fmtClock(cfg.dur);
     $('hudTimer').className='val';
-    $('hudMode').innerHTML=(code?(isRoom?'ROOM ':'CHALLENGE ')+esc(code.split('.')[1]).toUpperCase()+(isRoom?' \u00B7 ROUND '+esc(code.split('.')[2]):''):(prof?'PRACTICE \u00B7 targeted mix':'SOLO'))+
+    $('hudMode').innerHTML=(code?(isRoom?'ROOM '+esc(code.split('.')[1]).toUpperCase()+' \u00B7 ROUND '+esc(code.split('.')[2]):(code.indexOf('DC.')===0?'DAILY CHALLENGE':'CHALLENGE '+esc(code.split('.')[1]).toUpperCase())):(prof?'PRACTICE \u00B7 targeted mix':'SOLO'))+
       ' &middot; '+(prof?prof.ops.map(function(o){return OP_SYM[o];}).join(' '):cfgSummary(cfg))+' &middot; '+cfg.dur+'s'+(attempt>1?' &middot; ATTEMPT '+attempt:'');
     show('screen-game');
     updateLiveBar();
@@ -908,6 +914,10 @@
     if(game&&confirm('Abandon this round? The score won\u2019t count.')){
       if(game.live) Live.finish(game.score);
       if(game.soloSid) Watch.finish(game.soloSid,game.score);
+      if(game.code&&game.code.indexOf('DC.')===0){
+        postAbandon(game);
+        toast('Abandoned at '+game.score+' \u2014 it\u2019s on the daily board, marked as abandoned.');
+      }
       clearInterval(game.interval);game=null;
       updateLiveBar();
       show('screen-lobby');renderBoard();
@@ -947,7 +957,7 @@
 
     // Results screen
     $('resScore').textContent=g.score;
-    $('resCap').textContent='correct in '+g.cfg.dur+' seconds'+(g.code?(g.code.indexOf('RM.')===0?' · room '+g.code.split('.')[1]+', round '+g.code.split('.')[2]:' · challenge '+g.code.split('.')[1].toUpperCase()):'')+(g.practice?' · targeted practice':'')+(g.attempt>1?' · attempt '+g.attempt:'');
+    $('resCap').textContent='correct in '+g.cfg.dur+' seconds'+(g.code?(g.code.indexOf('RM.')===0?' · room '+g.code.split('.')[1]+', round '+g.code.split('.')[2]:(g.code.indexOf('DC.')===0?' · daily challenge':' · challenge '+g.code.split('.')[1].toUpperCase())):'')+(g.practice?' · targeted practice':'')+(g.attempt>1?' · attempt '+g.attempt:'');
     $('resPB').textContent=isPB?'\u2605 New personal best':(me.best?'Personal best: '+me.best:'');
     var avg=g.times.length?(g.times.reduce(function(a,b){return a+b;},0)/g.times.length/1000):0;
     var fastest=g.times.length?Math.min.apply(null,g.times)/1000:0;
@@ -1050,6 +1060,22 @@
 
   function typeKey(e){return (e.ops||'?')+' \u00B7 '+e.d+'s';}
   function noPractice(entries){return entries.filter(function(e){return e.ops!=='practice';});}
+
+  /* ---- Daily challenge: same questions for everyone, new at local midnight ---- */
+  var DAILY_CFG={dur:120,ops:{add:true,sub:true,mul:true,div:true},aA0:2,aA1:100,aB0:2,aB1:100,mA0:2,mA1:12,mB0:2,mB1:100};
+  function todayStamp(){var d=new Date();return d.getFullYear()*10000+(d.getMonth()+1)*100+d.getDate();}
+  function dailyCode(){return 'DC.'+todayStamp();}
+  function dailySeed(){
+    var s='zetaduel-daily-'+todayStamp(),h=2166136261;
+    for(var i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619);}
+    return h>>>0;
+  }
+  function startOfToday(){var d=new Date();d.setHours(0,0,0,0);return d.getTime();}
+  function untilMidnight(){
+    var d=new Date();d.setHours(24,0,0,0);
+    var ms=d.getTime()-Date.now(),h=Math.floor(ms/3600000),m=Math.ceil(ms%3600000/60000);
+    return h>0?h+'h '+m+'m':m+'m';
+  }
   /* best score per NAME per round type — names are uppercase everywhere */
   function dedupeBest(entries,sameType){
     var best={};
@@ -1082,9 +1108,10 @@
       var rc=i===0?'r1':i===1?'r2':i===2?'r3':'';
       var att=(e.at&&e.at>1)?'<span class="replay-flag" title="best of '+e.at+' attempts">\u21BB\u2009'+e.at+'</span>'
              :(e.r?'<span class="replay-flag" title="replayed a known challenge">\u21BB</span>':'');
+      var ab=e.ab?'<span class="replay-flag" style="color:var(--danger)" title="quit mid-round — score when they left">abandoned</span>':'';
       html+='<tr'+(e.ts===highlightTs?' class="me"':'')+'>'+
         '<td class="rank '+rc+'">'+(i+1)+'</td>'+
-        '<td class="nm">'+esc(e.n)+att+'</td>'+
+        '<td class="nm">'+esc(e.n)+att+ab+'</td>'+
         '<td class="scorecell">'+e.s+'</td>'+
         '<td>'+e.d+'s</td>'+
         '<td>'+esc(e.ops||'')+'</td>'+
@@ -1102,7 +1129,7 @@
     });
     var keys=Object.keys(groups).sort(function(a,b){return groups[b].length-groups[a].length;});
     el.innerHTML='<h2 style="margin-top:22px">By round type</h2>'+keys.map(function(k){
-      var pool=withTries(groups[k]).sort(function(a,b){return b.s-a.s||a.ts-b.ts;});
+      var pool=dedupeBest(groups[k],true).sort(function(a,b){return b.s-a.s||a.ts-b.ts;});
       return '<div class="bt-head">'+esc(k)+' <span class="bt-cnt">'+groups[k].length+' round'+(groups[k].length===1?'':'s')+' played</span></div>'+
         boardRows(pool,-1,5);
     }).join('');
@@ -1113,8 +1140,14 @@
     function pick(entries){
       var merged=noPractice(entries.slice());
       if(!run.practice&&!merged.some(function(e){return e.ts===run.ts;})) merged.push(entryOf(run));
-      var pool=run.code?merged.filter(function(e){return e.c===run.code;}):merged.filter(function(e){return !e.c&&e.d===run.dur;});
-      pool=withTries(pool);
+      var pool;
+      if(run.code){
+        // challenge/daily pools: best per name with visible attempt counts
+        pool=withTries(merged.filter(function(e){return e.c===run.code;}));
+      } else {
+        // solo pools: best per name, no attempt counting — solos are unlimited by design
+        pool=dedupeBest(merged.filter(function(e){return !e.c&&e.d===run.dur;}));
+      }
       pool.sort(function(a,b){return b.s-a.s||a.ts-b.ts;});
       target.innerHTML=boardRows(pool,run.ts);
     }
@@ -1132,21 +1165,32 @@
   });
   function renderBoard(){
     renderPractice();
+    renderDaily();
     var body=$('boardBody'),status=$('boardStatus');
     function draw(entries,note){
       entries=noPractice(entries);
-      var pool=entries.slice();
-      if(boardTab==='challenge'){
-        var code=$('joinCode').value.trim()||($('codeText').textContent||'').trim();
-        if(!code){body.innerHTML='<p class="lb-empty">Paste or create a challenge code to see its board.</p>';$('boardByType').innerHTML='';status.textContent=note;return;}
-        pool=withTries(pool.filter(function(e){return e.c===code;}));
+      $('boardByType').innerHTML='';
+      var pool;
+      if(boardTab==='daily'){
+        pool=withTries(entries.filter(function(e){return e.c===dailyCode();}));
         pool.sort(function(a,b){return b.s-a.s||a.ts-b.ts;});
-        body.innerHTML=boardRows(pool,-1);
-        $('boardByType').innerHTML='';
-        status.textContent=note;
+        body.innerHTML=pool.length?boardRows(pool,-1):'<p class="lb-empty">No one has taken on today\u2019s challenge yet — same questions for every player. Be first.</p>';
+        status.textContent='Today\u2019s daily challenge \u2014 identical questions for everyone, best score per player with attempt counts shown. A fresh one lands at midnight.';
         return;
       }
-      pool=dedupeBest(pool);
+      if(boardTab==='today'){
+        pool=dedupeBest(entries.filter(function(e){return e.ts>=startOfToday();}));
+        pool.sort(function(a,b){return b.s-a.s||a.ts-b.ts;});
+        body.innerHTML=pool.length?boardRows(pool,-1):'<p class="lb-empty">Nothing scored yet today.</p>';
+        status.textContent='Every score set today \u2014 best per player per round type.';
+        return;
+      }
+      if(boardTab==='activity'){
+        body.innerHTML=activityRows(entries);
+        status.textContent='Total recorded plays per player \u2014 solos, challenges, rooms and daily attempts all count.';
+        return;
+      }
+      pool=dedupeBest(entries.slice());
       pool.sort(function(a,b){return b.s-a.s||a.ts-b.ts;});
       body.innerHTML=boardRows(pool,-1);
       renderByType(entries);
@@ -1166,13 +1210,40 @@
       return;
     }
     Watch.close();
-    if(boardTab==='session'){draw(sessionBoard,'Scores from this browser session.');return;}
     if(hasSharedBackend()){
       body.innerHTML='<p class="lb-empty">Loading the shared board…</p>';
       backendList().then(function(entries){draw(entries||[],backendNote());});
     } else {
       draw(sessionBoard,backendNote());
     }
+  }
+  function activityRows(entries){
+    if(!entries.length) return '<p class="lb-empty">No plays recorded yet.</p>';
+    var m={};
+    entries.forEach(function(e){
+      var k=String(e.n||'').toUpperCase();
+      var o=m[k]=m[k]||{n:e.n,plays:0,best:0,last:0};
+      o.plays++;
+      if(e.s>o.best)o.best=e.s;
+      if(e.ts>o.last)o.last=e.ts;
+    });
+    var rows=Object.keys(m).map(function(k){return m[k];})
+      .sort(function(a,b){return b.plays-a.plays||b.best-a.best;});
+    var html='<table class="lb"><thead><tr><th></th><th>Player</th><th>Plays</th><th>Best</th><th>Last played</th></tr></thead><tbody>';
+    rows.slice(0,20).forEach(function(o,i){
+      var rc=i===0?'r1':i===1?'r2':i===2?'r3':'';
+      html+='<tr><td class="rank '+rc+'">'+(i+1)+'</td><td class="nm">'+esc(o.n)+'</td>'+
+        '<td class="scorecell">'+o.plays+'</td><td>'+o.best+'</td><td>'+timeAgo(o.last)+'</td></tr>';
+    });
+    return html+'</tbody></table>';
+  }
+  function renderDaily(){
+    var el=$('dailyStatus');
+    if(!el) return;
+    var n=(me.attempts&&me.attempts[dailyCode()])||0;
+    el.textContent=(n
+      ?'Completed today'+(n>1?' \u2014 '+n+' attempts, visibly counted':'')+'. New challenge in '+untilMidnight()+'.'
+      :'Same questions for every player. New challenge in '+untilMidnight()+'.');
   }
 
   /* ============ Team sync UI ============ */
@@ -1247,6 +1318,23 @@
   $('btnSolo').addEventListener('click',function(){
     if(!requireName()) return;
     startRound((Math.random()*0xFFFFFFFF)>>>0,readCfg(),null);
+  });
+  $('btnDaily').addEventListener('click',function(){
+    if(!requireName()) return;
+    startRound(dailySeed(),DAILY_CFG,dailyCode());
+  });
+  function postAbandon(g){
+    if(!g||!g.code||g.code.indexOf('DC.')!==0||!hasSharedBackend()) return;
+    backendPost({n:playerName(),s:g.score,d:g.cfg.dur,c:g.code,ops:cfgSummary(g.cfg),
+      ts:Date.now(),at:g.attempt||1,r:(g.attempt||1)>1?1:0,ab:1});
+  }
+  window.addEventListener('beforeunload',function(){
+    if(game&&game.code&&game.code.indexOf('DC.')===0&&Live.server&&navigator.sendBeacon){
+      navigator.sendBeacon('/api/result',new Blob([JSON.stringify({
+        n:playerName(),s:game.score,d:game.cfg.dur,c:game.code,ops:cfgSummary(game.cfg),
+        ts:Date.now(),at:game.attempt||1,r:(game.attempt||1)>1?1:0,ab:1
+      })],{type:'text/plain'}));
+    }
   });
   $('btnCreate').addEventListener('click',function(){
     var cfg=readCfg();
@@ -1342,6 +1430,10 @@
     return fetch(path,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body||{})})
       .then(function(r){return r.json();});
   }
+  function setLiveDot(n){
+    var d=$('liveDot');
+    if(d) d.classList.toggle('on',n>0);
+  }
   Live.init=function(){
     fetch('/api/ping').then(function(r){return r.json();}).then(function(d){
       if(d&&d.ok&&d.server==='zetaduel'){
@@ -1351,6 +1443,13 @@
         var syncCard=$('syncUrlInput');
         if(syncCard&&syncCard.closest('.card')) syncCard.closest('.card').style.display='none';
         renderBoard();
+        var pollDot=function(){
+          fetch('/api/solo/list').then(function(r){return r.json();}).then(function(d2){
+            setLiveDot(((d2&&d2.list)||[]).filter(function(s){return !s.done;}).length);
+          }).catch(function(){});
+        };
+        pollDot();
+        setInterval(pollDot,20000);
       }
     }).catch(function(){});
   };
@@ -1573,6 +1672,7 @@
       if(d.type==='solos'){
         Watch.sessions=d.list||[];
         Watch.offset=d.serverNow-Date.now();
+        setLiveDot(Watch.sessions.filter(function(s){return !s.done;}).length);
         Watch.render();
       } else if(d.type==='sscore'){
         var s=Watch.sessions.find(function(x){return x.sid===d.sid;});

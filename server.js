@@ -39,6 +39,52 @@ function saveBoardSoon() {
       if (err) console.error('[save] failed:', err.message);
     });
   }, 400);
+  gistSaveSoon();
+}
+
+/* ---- optional Gist persistence: survives redeploys on free hosting ----
+   Set two environment variables on your host (e.g. Render → Environment):
+     SCORES_GIST_ID  — the ID from your secret gist's URL
+     GITHUB_TOKEN    — a token with the "gist" scope
+   The gist becomes the source of truth: loaded at boot, saved after scores. */
+const GIST_ID = (process.env.SCORES_GIST_ID || '').trim();
+const GH_TOKEN = (process.env.GITHUB_TOKEN || '').trim();
+const GIST_FILE = 'scores.json';
+async function gistLoad() {
+  if (!GIST_ID || !GH_TOKEN) return false;
+  try {
+    const r = await fetch('https://api.github.com/gists/' + GIST_ID, {
+      headers: { Authorization: 'Bearer ' + GH_TOKEN, 'User-Agent': 'zetaduel', Accept: 'application/vnd.github+json' }
+    });
+    if (!r.ok) throw new Error('http ' + r.status);
+    const g = await r.json();
+    const f = g.files && g.files[GIST_FILE];
+    if (f && f.content) {
+      const d = JSON.parse(f.content);
+      if (Array.isArray(d.entries)) {
+        board = d;
+        console.log(`[gist] loaded ${d.entries.length} scores — leaderboard survives redeploys`);
+        return true;
+      }
+    }
+  } catch (e) { console.error('[gist] load failed:', e.message); }
+  return false;
+}
+let gistTimer = null;
+function gistSaveSoon() {
+  if (!GIST_ID || !GH_TOKEN) return;
+  clearTimeout(gistTimer);
+  gistTimer = setTimeout(async () => {
+    try {
+      const r = await fetch('https://api.github.com/gists/' + GIST_ID, {
+        method: 'PATCH',
+        headers: { Authorization: 'Bearer ' + GH_TOKEN, 'User-Agent': 'zetaduel', Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ files: { [GIST_FILE]: { content: JSON.stringify(board) } } })
+      });
+      if (!r.ok) console.error('[gist] save http', r.status);
+    } catch (e) { console.error('[gist] save failed:', e.message); }
+  }, 3000);
+  if (gistTimer.unref) gistTimer.unref();
 }
 function addEntry(e) {
   board.entries.push(e);
@@ -260,7 +306,7 @@ const server = http.createServer(async (req, res) => {
 
   /* ---- api ---- */
   try {
-    if (p === '/api/ping') return send(res, 200, { ok: true, server: 'zetaduel', now: Date.now(), v: 7, features: ['rooms', 'solowatch'] });
+    if (p === '/api/ping') return send(res, 200, { ok: true, server: 'zetaduel', now: Date.now(), v: 8, features: ['rooms', 'solowatch', 'daily'] });
 
     if (p === '/api/leaderboard' && req.method === 'GET') {
       return send(res, 200, { ok: true, entries: board.entries.slice(0, 300) });
@@ -346,7 +392,7 @@ const server = http.createServer(async (req, res) => {
       addEntry({
         n: name, s: cleanScore(b.s), d: dur, c: code,
         ops: String(b.ops || '').slice(0, 12),
-        ts: Date.now(), at, r: at > 1 ? 1 : 0
+        ts: Date.now(), at, r: at > 1 ? 1 : 0, ab: b.ab ? 1 : 0
       });
       return send(res, 200, { ok: true, at });
     }
@@ -464,20 +510,25 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log('');
-  console.log('  ZetaDuel server is up.');
-  console.log(`  Local:    http://localhost:${PORT}`);
-  try {
-    const nets = require('os').networkInterfaces();
-    for (const name of Object.keys(nets)) {
-      for (const ni of nets[name]) {
-        if (ni.family === 'IPv4' && !ni.internal) {
-          console.log(`  Network:  http://${ni.address}:${PORT}   <- share this with friends on your wifi`);
+(async () => {
+  await gistLoad();
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log('');
+    console.log('  ZetaDuel server is up.');
+    console.log(`  Local:    http://localhost:${PORT}`);
+    try {
+      const nets = require('os').networkInterfaces();
+      for (const name of Object.keys(nets)) {
+        for (const ni of nets[name]) {
+          if (ni.family === 'IPv4' && !ni.internal) {
+            console.log(`  Network:  http://${ni.address}:${PORT}   <- share this with friends on your wifi`);
+          }
         }
       }
-    }
-  } catch (e) {}
-  console.log(`  Scores persist in ${DATA_FILE}`);
-  console.log('');
-});
+    } catch (e) {}
+    console.log(GIST_ID && GH_TOKEN
+      ? '  Scores persist in your GitHub gist — deploys won\'t wipe them.'
+      : `  Scores persist in ${DATA_FILE} (set SCORES_GIST_ID + GITHUB_TOKEN to survive redeploys)`);
+    console.log('');
+  });
+})();
