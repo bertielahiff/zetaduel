@@ -194,6 +194,11 @@
   #liveBar .lvp.lead{border-color:var(--amber)}
   #liveBar .lvp.done-p{opacity:.6}
   #resRoomLive{margin-bottom:14px}
+  #boardByType h2{font-family:var(--sans);font-weight:400;font-size:10px;letter-spacing:.26em;text-transform:uppercase;color:var(--sage-deep);padding-top:14px;border-top:1px solid var(--line)}
+  .bt-head{font-family:var(--mono);font-size:13px;color:var(--green);margin:16px 0 4px}
+  .bt-head .bt-cnt{font-family:var(--sans);font-size:10.5px;color:var(--faint);letter-spacing:.08em;margin-left:9px;text-transform:uppercase}
+  .spect-note{font-size:12.5px;color:var(--amber);font-style:italic;margin-top:8px}
+  .spect-clock{font-family:var(--mono);font-size:13px;color:var(--dim);margin-top:6px}
 
   #toast{position:fixed;bottom:34px;left:50%;transform:translateX(-50%) translateY(10px);background:#1E2935;border:1px solid var(--line);color:var(--ink);padding:10px 20px;border-radius:999px;font-size:13px;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:100;max-width:84vw}
   #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
@@ -254,8 +259,8 @@
 
       <div class="card">
         <h2>Play</h2>
-        <label class="f">Your name</label>
-        <input class="ti" id="playerName" maxlength="24" placeholder="e.g. Priya">
+        <label class="f">Your name <span style="color:var(--amber)">*</span></label>
+        <input class="ti" id="playerName" maxlength="24" placeholder="e.g. PRIYA" style="text-transform:uppercase" required>
         <button class="btn" id="btnSolo">Solo sprint</button>
         <button class="btn amber" id="btnCreate">Create a challenge for colleagues</button>
         <div class="codebox" id="codeBox">
@@ -305,6 +310,7 @@
         <button class="btab" data-tab="session">This session</button>
       </div>
       <div id="boardBody"></div>
+      <div id="boardByType"></div>
       <div class="lb-status" id="boardStatus"></div>
     </div>
   </section>
@@ -728,8 +734,8 @@
   }
 
   /* ============ App state ============ */
-  var sessionBoard=[];           // {n,s,d,c,ops,ts,r}
-  var me={name:'',best:0,played:[]};
+  var sessionBoard=[];           // {n,s,d,c,ops,ts,at,r}
+  var me={name:'',best:0,played:[],attempts:{},history:[]};
   var playedThisSession={};
   var game=null;                 // live round
   var lastRun=null;              // finished round info
@@ -737,8 +743,8 @@
 
   loadMe().then(function(m){
     if(m){
-      me=m;me.played=me.played||[];me.history=me.history||[];
-      if(me.name&&!$('playerName').value)$('playerName').value=me.name;
+      me=m;me.played=me.played||[];me.history=me.history||[];me.attempts=me.attempts||{};
+      if(me.name&&!$('playerName').value)$('playerName').value=String(me.name).toUpperCase();
     }
     renderPractice();
   });
@@ -750,18 +756,39 @@
 
   /* ============ Game flow ============ */
   function playerName(){
-    var n=$('playerName').value.trim();
-    return n||'Anonymous';
+    return $('playerName').value.trim().toUpperCase();
   }
+  function requireName(){
+    var n=playerName();
+    if(!n){
+      toast('Enter your name first \u2014 it\u2019s required to play.');
+      $('playerName').focus();
+      return null;
+    }
+    return n;
+  }
+  $('playerName').addEventListener('input',function(){
+    var p=this.selectionStart;
+    this.value=this.value.toUpperCase();
+    try{this.setSelectionRange(p,p);}catch(e){}
+  });
   function startRound(seed,cfg,code,prof,opts){
     if(!prof&&!cfg.ops.add&&!cfg.ops.sub&&!cfg.ops.mul&&!cfg.ops.div){
       toast('Turn on at least one operation first.');return;
     }
+    if(!requireName()) return;
     me.name=playerName();
     var isRoom=!!(code&&code.indexOf('RM.')===0);
-    var isReplay=!isRoom&&!!(code&&(playedThisSession[code]||(me.played&&me.played.indexOf(code)!==-1)));
+    var attempt=1;
+    if(code&&!isRoom){
+      me.attempts=me.attempts||{};
+      attempt=(me.attempts[code]||0)+1;
+      me.attempts[code]=attempt;
+      saveMe(me);
+    }
+    var isReplay=attempt>1;
     game={
-      seed:seed,cfg:cfg,code:code||null,replay:isReplay,
+      seed:seed,cfg:cfg,code:code||null,replay:isReplay,attempt:attempt,
       practice:!!prof,prof:prof||null,
       live:!!(opts&&opts.live),
       rng:mulberry32(seed),
@@ -773,7 +800,7 @@
     $('hudTimer').textContent=fmtClock(cfg.dur);
     $('hudTimer').className='val';
     $('hudMode').innerHTML=(code?(isRoom?'ROOM ':'CHALLENGE ')+esc(code.split('.')[1]).toUpperCase()+(isRoom?' \u00B7 ROUND '+esc(code.split('.')[2]):''):(prof?'PRACTICE \u00B7 targeted mix':'SOLO'))+
-      ' &middot; '+(prof?prof.ops.map(function(o){return OP_SYM[o];}).join(' '):cfgSummary(cfg))+' &middot; '+cfg.dur+'s'+(isReplay?' &middot; REPLAY':'');
+      ' &middot; '+(prof?prof.ops.map(function(o){return OP_SYM[o];}).join(' '):cfgSummary(cfg))+' &middot; '+cfg.dur+'s'+(attempt>1?' &middot; ATTEMPT '+attempt:'');
     show('screen-game');
     updateLiveBar();
     var go=function(){
@@ -868,7 +895,7 @@
     if(g.q) g.log.push({text:g.q.text,ans:g.q.answer,op:g.q.op,ms:Date.now()-g.qStart,dnf:true});
     lastRun={
       name:me.name,score:g.score,dur:g.cfg.dur,code:g.code,cfg:g.cfg,seed:g.seed,
-      replay:g.replay,practice:g.practice,live:g.live,times:g.times,log:g.log,opCounts:g.opCounts,seen:g.seen,ts:Date.now()
+      replay:g.replay,attempt:g.attempt||1,practice:g.practice,live:g.live,times:g.times,log:g.log,opCounts:g.opCounts,seen:g.seen,ts:Date.now()
     };
     if(g.live) Live.finish(g.score);
     if(g.code){
@@ -889,11 +916,11 @@
     var isPB=g.score>(me.best||0)&&!g.replay&&!g.practice;
     if(isPB) me.best=g.score;
     saveMe(me);
-    sessionBoard.push({n:me.name,s:g.score,d:g.cfg.dur,c:g.code,ops:g.practice?'practice':cfgSummary(g.cfg),ts:Date.now(),r:g.replay?1:0});
+    sessionBoard.push({n:me.name,s:g.score,d:g.cfg.dur,c:g.code,ops:g.practice?'practice':cfgSummary(g.cfg),ts:Date.now(),at:g.attempt||1,r:g.replay?1:0});
 
     // Results screen
     $('resScore').textContent=g.score;
-    $('resCap').textContent='correct in '+g.cfg.dur+' seconds'+(g.code?(g.code.indexOf('RM.')===0?' · room '+g.code.split('.')[1]+', round '+g.code.split('.')[2]:' · challenge '+g.code.split('.')[1].toUpperCase()):'')+(g.practice?' · targeted practice':'')+(g.replay?' · replay':'');
+    $('resCap').textContent='correct in '+g.cfg.dur+' seconds'+(g.code?(g.code.indexOf('RM.')===0?' · room '+g.code.split('.')[1]+', round '+g.code.split('.')[2]:' · challenge '+g.code.split('.')[1].toUpperCase()):'')+(g.practice?' · targeted practice':'')+(g.attempt>1?' · attempt '+g.attempt:'');
     $('resPB').textContent=isPB?'\u2605 New personal best':(me.best?'Personal best: '+me.best:'');
     var avg=g.times.length?(g.times.reduce(function(a,b){return a+b;},0)/g.times.length/1000):0;
     var fastest=g.times.length?Math.min.apply(null,g.times)/1000:0;
@@ -971,7 +998,7 @@
     }
   }
   function entryOf(run){
-    return {n:run.name,s:run.score,d:run.dur,c:run.code,ops:run.practice?'practice':cfgSummary(run.cfg),ts:run.ts,r:run.replay?1:0};
+    return {n:run.name,s:run.score,d:run.dur,c:run.code,ops:run.practice?'practice':cfgSummary(run.cfg),ts:run.ts,at:run.attempt||1,r:run.replay?1:0};
   }
   function postScore(run){
     if(postedTs[run.ts]) return Promise.resolve();
@@ -989,20 +1016,63 @@
     }
   });
 
-  function boardRows(entries,highlightTs){
+  function typeKey(e){return (e.ops||'?')+' \u00B7 '+e.d+'s';}
+  /* best score per NAME per round type — names are uppercase everywhere */
+  function dedupeBest(entries,sameType){
+    var best={};
+    entries.forEach(function(e){
+      var k=String(e.n||'').toUpperCase()+(sameType?'':'|'+typeKey(e));
+      var cur=best[k];
+      if(!cur||e.s>cur.s||(e.s===cur.s&&e.ts<cur.ts)) best[k]=e;
+    });
+    return Object.keys(best).map(function(k){return best[k];});
+  }
+  /* annotate each best entry with how many tries that name made in this pool */
+  function withTries(pool){
+    var counts={};
+    pool.forEach(function(e){
+      var k=String(e.n||'').toUpperCase();
+      counts[k]=(counts[k]||0)+1;
+    });
+    return dedupeBest(pool,true).map(function(e){
+      var k=String(e.n||'').toUpperCase();
+      var tries=Math.max(counts[k]||1,e.at||1);
+      var copy={};for(var key in e)copy[key]=e[key];
+      copy.at=tries;
+      return copy;
+    });
+  }
+  function boardRows(entries,highlightTs,limit){
     if(!entries.length) return '<p class="lb-empty">No scores yet — be the first on the board.</p>';
     var html='<table class="lb"><thead><tr><th></th><th>Player</th><th>Score</th><th>Round</th><th>Set</th><th>When</th></tr></thead><tbody>';
-    entries.slice(0,15).forEach(function(e,i){
+    entries.slice(0,limit||15).forEach(function(e,i){
       var rc=i===0?'r1':i===1?'r2':i===2?'r3':'';
+      var att=(e.at&&e.at>1)?'<span class="replay-flag" title="best of '+e.at+' attempts">\u21BB\u2009'+e.at+'</span>'
+             :(e.r?'<span class="replay-flag" title="replayed a known challenge">\u21BB</span>':'');
       html+='<tr'+(e.ts===highlightTs?' class="me"':'')+'>'+
         '<td class="rank '+rc+'">'+(i+1)+'</td>'+
-        '<td class="nm">'+esc(e.n)+(e.r?'<span class="replay-flag" title="replayed a known challenge">\u21BB</span>':'')+'</td>'+
+        '<td class="nm">'+esc(e.n)+att+'</td>'+
         '<td class="scorecell">'+e.s+'</td>'+
         '<td>'+e.d+'s</td>'+
         '<td>'+esc(e.ops||'')+'</td>'+
         '<td>'+timeAgo(e.ts)+'</td></tr>';
     });
     return html+'</tbody></table>';
+  }
+  function renderByType(entries){
+    var el=$('boardByType');
+    if(!entries.length){el.innerHTML='';return;}
+    var groups={};
+    entries.forEach(function(e){
+      var k=typeKey(e);
+      (groups[k]=groups[k]||[]).push(e);
+    });
+    var keys=Object.keys(groups).sort(function(a,b){return groups[b].length-groups[a].length;});
+    el.innerHTML='<h2 style="margin-top:22px">By round type</h2>'+keys.map(function(k){
+      var pool=withTries(groups[k]).sort(function(a,b){return b.s-a.s||a.ts-b.ts;});
+      return '<div class="bt-head">'+esc(k)+' <span class="bt-cnt">'+groups[k].length+' round'+(groups[k].length===1?'':'s')+' played</span></div>'+
+        boardRows(pool,-1,5);
+    }).join('');
   }
   function renderResultsBoard(){
     var run=lastRun;
@@ -1011,6 +1081,7 @@
       var merged=entries.slice();
       if(!merged.some(function(e){return e.ts===run.ts;})) merged.push(entryOf(run));
       var pool=run.code?merged.filter(function(e){return e.c===run.code;}):merged.filter(function(e){return !e.c&&e.d===run.dur;});
+      pool=withTries(pool);
       pool.sort(function(a,b){return b.s-a.s||a.ts-b.ts;});
       target.innerHTML=boardRows(pool,run.ts);
     }
@@ -1033,12 +1104,19 @@
       var pool=entries.slice();
       if(boardTab==='challenge'){
         var code=$('joinCode').value.trim()||($('codeText').textContent||'').trim();
-        if(!code){body.innerHTML='<p class="lb-empty">Paste or create a challenge code to see its board.</p>';status.textContent=note;return;}
-        pool=pool.filter(function(e){return e.c===code;});
+        if(!code){body.innerHTML='<p class="lb-empty">Paste or create a challenge code to see its board.</p>';$('boardByType').innerHTML='';status.textContent=note;return;}
+        pool=withTries(pool.filter(function(e){return e.c===code;}));
+        pool.sort(function(a,b){return b.s-a.s||a.ts-b.ts;});
+        body.innerHTML=boardRows(pool,-1);
+        $('boardByType').innerHTML='';
+        status.textContent=note;
+        return;
       }
+      pool=dedupeBest(pool);
       pool.sort(function(a,b){return b.s-a.s||a.ts-b.ts;});
       body.innerHTML=boardRows(pool,-1);
-      status.textContent=note;
+      renderByType(entries);
+      status.textContent=note+' Showing each player\u2019s best per round type.';
     }
     if(boardTab==='session'){draw(sessionBoard,'Scores from this browser session.');return;}
     if(hasSharedBackend()){
@@ -1111,6 +1189,7 @@
     return prof;
   }
   $('btnPractice').addEventListener('click',function(){
+    if(!requireName()) return;
     var prof=renderPractice();
     if(!prof){toast('Play a couple of rounds first — I\u2019ll learn what slows you down.');return;}
     startRound((Math.random()*0xFFFFFFFF)>>>0,readCfg(),null,prof);
@@ -1118,6 +1197,7 @@
 
   /* ============ Lobby actions ============ */
   $('btnSolo').addEventListener('click',function(){
+    if(!requireName()) return;
     startRound((Math.random()*0xFFFFFFFF)>>>0,readCfg(),null);
   });
   $('btnCreate').addEventListener('click',function(){
@@ -1133,6 +1213,7 @@
     copyText($('codeText').textContent,'Copied.');
   });
   $('btnPlayCode').addEventListener('click',function(){
+    if(!requireName()) return;
     var d=decodeCode($('codeText').textContent);
     if(d) startRound(d.seed,d.cfg,$('codeText').textContent.trim());
   });
@@ -1143,6 +1224,7 @@
     if(!raw){toast('Paste a challenge code first.');return;}
     var d=decodeCode(raw);
     if(!d){toast('That doesn\u2019t look like a ZetaDuel code.');return;}
+    if(!requireName()) return;
     startRound(d.seed,d.cfg,raw);
   }
 
@@ -1199,6 +1281,7 @@
     }).catch(function(){});
   };
   Live.create=function(){
+    if(!requireName()) return;
     me.name=playerName();
     liveApi('/api/room',{pid:Live.pid,name:me.name,cfg:readCfg()}).then(function(d){
       if(!d.ok){toast(d.error||'Couldn\u2019t create a room.');return;}
@@ -1209,10 +1292,12 @@
   Live.join=function(code){
     code=String(code||'').trim().toUpperCase();
     if(!/^[A-Z]{4}$/.test(code)){toast('Room codes are 4 letters, e.g. KJQW.');return;}
+    if(!requireName()) return;
     me.name=playerName();
     liveApi('/api/room/'+code+'/join',{pid:Live.pid,name:me.name}).then(function(d){
       if(!d.ok){toast(d.error||'Couldn\u2019t join that room.');return;}
       Live.attach(d.room);
+      if(d.room.state==='live') toast('Round in progress — you\u2019re spectating live. You\u2019ll play from the next round.');
     }).catch(function(){toast('Server unreachable.');});
   };
   Live.attach=function(snap){
@@ -1260,6 +1345,7 @@
       }
       updateLiveBar();
       renderResRoomLive();
+      if(Live.room&&Live.room.state==='live'&&!game) Live.renderPanel(); // spectators see the race
     }
   };
   Live.sendScore=function(score){
@@ -1288,17 +1374,32 @@
   };
   Live.renderPanel=function(){
     var panel=$('roomPanel'),joinUI=$('liveJoinUI');
-    if(!Live.room){panel.style.display='none';joinUI.style.display='block';return;}
+    if(!Live.room){panel.style.display='none';joinUI.style.display='block';Live.stopClock();return;}
     joinUI.style.display='none';panel.style.display='block';
     var r=Live.room;
     var isHost=r.hostId===Live.pid;
-    var roster=r.players.map(function(p){
-      return '<span class="lp'+(p.online?' on':'')+(p.id===Live.pid?' meplayer':'')+'">'+
-        '<span class="dotp"></span>'+esc(p.name)+
-        (p.id===r.hostId?' <span class="crown">\u2605</span>':'')+
-        (r.state!=='lobby'&&p.participant?' <b style="font-family:var(--mono);margin-left:3px">'+p.score+'</b>':'')+
-        (p.done?' \u2713':'')+'</span>';
-    }).join('');
+    var meP=r.players.find(function(p){return p.id===Live.pid;});
+    var spectating=r.state==='live'&&(!meP||!meP.participant);
+    var roster;
+    if(r.state==='live'){
+      var ps=r.players.filter(function(p){return p.participant;}).slice()
+        .sort(function(a,b){return b.score-a.score;});
+      var top=ps.length?ps[0].score:0;
+      roster=ps.map(function(p,i){
+        return '<span class="lp'+(p.online?' on':'')+(p.id===Live.pid?' meplayer':'')+'">'+
+          '<span class="dotp"></span>'+(i+1)+'. '+esc(p.name)+
+          ' <b style="font-family:var(--mono);margin-left:3px;'+(p.score===top&&top>0?'color:var(--amber)':'')+'">'+p.score+'</b>'+
+          (p.done?' \u2713':'')+'</span>';
+      }).join('');
+    } else {
+      roster=r.players.map(function(p){
+        return '<span class="lp'+(p.online?' on':'')+(p.id===Live.pid?' meplayer':'')+'">'+
+          '<span class="dotp"></span>'+esc(p.name)+
+          (p.id===r.hostId?' <span class="crown">\u2605</span>':'')+
+          (r.state==='done'&&p.participant?' <b style="font-family:var(--mono);margin-left:3px">'+p.score+'</b>':'')+
+          (p.done?' \u2713':'')+'</span>';
+      }).join('');
+    }
     var statusLine=r.state==='lobby'
       ?(isHost?'You\u2019re hosting — start when everyone\u2019s in.':'Waiting for the host to start\u2026')
       :r.state==='live'?'Round '+r.round+' in progress\u2026'
@@ -1310,6 +1411,8 @@
         '<div class="note" style="margin:0;flex:1;min-width:200px">'+cfgSummary(r.cfg)+' \u00B7 '+r.cfg.dur+'s \u00B7 '+esc(statusLine)+'</div>'+
       '</div>'+
       '<div class="live-roster">'+roster+'</div>'+
+      (spectating?'<div class="spect-note">Spectating live — scores update as they type. You\u2019ll be in from the next round.</div>':'')+
+      (r.state==='live'?'<div class="spect-clock" id="roomLiveClock"></div>':'')+
       '<div class="joinrow" style="margin-top:8px">'+
         (isHost&&r.state!=='live'?'<button class="btn amber" id="btnRoomStart" style="padding:11px 22px">'+(r.round>0?'Start round '+(r.round+1):'Start round')+'</button>':'')+
         '<button class="btn ghost" id="btnRoomCopy">Copy room code</button>'+
@@ -1319,6 +1422,25 @@
     if(bs) bs.addEventListener('click',Live.start);
     $('btnRoomCopy').addEventListener('click',function(){copyText(r.code,'Room code copied — send it to your friends.');});
     $('btnRoomLeave').addEventListener('click',Live.leave);
+    if(r.state==='live') Live.ensureClock(); else Live.stopClock();
+  };
+  Live.ensureClock=function(){
+    if(Live.clockT) return;
+    Live.clockT=setInterval(function(){
+      var el=$('roomLiveClock');
+      var r=Live.room;
+      if(!el||!r||r.state!=='live'){Live.stopClock();return;}
+      var serverNow=Date.now()+Live.offset;
+      if(serverNow<r.startAt){
+        el.textContent='Starting in '+Math.ceil((r.startAt-serverNow)/1000)+'\u2026';
+      } else {
+        var rem=Math.max(0,Math.ceil((r.startAt+r.cfg.dur*1000-serverNow)/1000));
+        el.textContent=rem>0?rem+'s left in the round':'Waiting for the last finishers\u2026';
+      }
+    },400);
+  };
+  Live.stopClock=function(){
+    clearInterval(Live.clockT);Live.clockT=null;
   };
   function updateLiveBar(){
     var bar=$('liveBar');

@@ -49,7 +49,7 @@ function addEntry(e) {
 
 /* ---------------- sanitisers ---------------- */
 function cleanName(n) {
-  return String(n || 'Anonymous').replace(/[\u0000-\u001F\u007F]/g, '').trim().slice(0, MAX_NAME) || 'Anonymous';
+  return String(n || '').replace(/[\u0000-\u001F\u007F]/g, '').trim().toUpperCase().slice(0, MAX_NAME);
 }
 function cleanScore(s) {
   s = parseInt(s, 10);
@@ -241,13 +241,22 @@ const server = http.createServer(async (req, res) => {
       const b = await readBody(req);
       const dur = parseInt(b.d, 10);
       if (!DURATIONS.includes(dur)) return send(res, 400, { ok: false, error: 'bad duration' });
+      const name = cleanName(b.n);
+      if (!name) return send(res, 400, { ok: false, error: 'name required' });
+      const code = b.c ? String(b.c).slice(0, 40) : null;
+      // attempt number is authoritative: counted by NAME + challenge code on the server,
+      // so replays can't hide even across devices
+      let at = Math.max(1, parseInt(b.at, 10) || 1);
+      if (code) {
+        const prior = board.entries.filter(e => e.n === name && e.c === code).length;
+        at = Math.max(at, prior + 1);
+      }
       addEntry({
-        n: cleanName(b.n), s: cleanScore(b.s), d: dur,
-        c: b.c ? String(b.c).slice(0, 40) : null,
+        n: name, s: cleanScore(b.s), d: dur, c: code,
         ops: String(b.ops || '').slice(0, 12),
-        ts: Date.now(), r: b.r ? 1 : 0
+        ts: Date.now(), at, r: at > 1 ? 1 : 0
       });
-      return send(res, 200, { ok: true });
+      return send(res, 200, { ok: true, at });
     }
 
     if (p === '/api/room' && req.method === 'POST') {
@@ -255,7 +264,9 @@ const server = http.createServer(async (req, res) => {
       if (rooms.size >= MAX_ROOMS) return send(res, 503, { ok: false, error: 'server full of rooms' });
       const pid = String(b.pid || '').slice(0, 40);
       if (!pid) return send(res, 400, { ok: false, error: 'no pid' });
-      const room = makeRoom(pid, cleanName(b.name), cleanCfg(b.cfg));
+      const hostName = cleanName(b.name);
+      if (!hostName) return send(res, 400, { ok: false, error: 'name required' });
+      const room = makeRoom(pid, hostName, cleanCfg(b.cfg));
       if (!room) return send(res, 503, { ok: false, error: 'no codes left' });
       return send(res, 200, { ok: true, room: roomSnapshot(room) });
     }
@@ -302,11 +313,13 @@ const server = http.createServer(async (req, res) => {
       if (!pid) return send(res, 400, { ok: false, error: 'no pid' });
 
       if (action === 'join') {
+        const joinName = cleanName(b.name);
+        if (!joinName) return send(res, 400, { ok: false, error: 'name required' });
         if (!room.players.has(pid) && room.players.size >= MAX_PLAYERS_PER_ROOM)
           return send(res, 403, { ok: false, error: 'room full' });
         const existing = room.players.get(pid);
-        if (existing) existing.name = cleanName(b.name);
-        else room.players.set(pid, { id: pid, name: cleanName(b.name), score: 0, done: false, online: false, participant: false });
+        if (existing) existing.name = joinName;
+        else room.players.set(pid, { id: pid, name: joinName, score: 0, done: false, online: false, participant: false });
         touch(room); broadcastRoom(room);
         return send(res, 200, { ok: true, room: roomSnapshot(room) });
       }
@@ -345,7 +358,7 @@ const server = http.createServer(async (req, res) => {
           addEntry({
             n: pl.name, s: pl.score, d: room.cfg.dur,
             c: 'RM.' + room.code + '.' + room.round,
-            ops: opsSummary(room.cfg), ts: Date.now(), r: 0
+            ops: opsSummary(room.cfg), ts: Date.now(), at: 1, r: 0
           });
         }
         touch(room); broadcastRoom(room); maybeEndRound(room);
