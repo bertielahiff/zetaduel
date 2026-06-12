@@ -275,7 +275,7 @@
           <option value="120" selected>120 seconds — the classic</option>
           <option value="300">300 seconds — marathon</option>
         </select>
-        <p class="note">Answers advance the moment they're correct — no Enter key, no skipping. Just like the original.</p>
+        <p class="note">Answers advance the moment they're correct — no Enter key, no skipping. Just like the original. Scores only reach the shared boards when the enabled ranges cover at least the standard (2 to 100, and 2 to 12 for the &times; factor) — narrower sets play fine but stay private.</p>
       </div>
 
       <div class="card">
@@ -976,7 +976,7 @@
       return '<div class="stat-chip"><div class="v">'+esc(String(c.v))+'</div><div class="k">'+c.k+'</div></div>';
     }).join('');
     $('btnShareRes').style.display=(g.code&&!g.live)?'block':'none';
-    $('postRow').style.display=(hasSharedBackend()&&!g.live&&!g.practice)?'flex':'none';
+    $('postRow').style.display=(hasSharedBackend()&&!g.live&&!g.practice&&boardEligible(g.cfg))?'flex':'none';
     revSort='order';
     document.querySelectorAll('#revTabs .btab').forEach(function(x){x.classList.toggle('active',x.dataset.rev==='order');});
     renderReview();
@@ -1033,6 +1033,11 @@
       renderResultsBoard();
       return;
     }
+    if(!boardEligible(run.cfg)){
+      $('resBoardStatus').textContent='Ranges below the 2\u2013100 standard \u2014 this score stays off the shared boards. Narrower sets are great for practising, but they\u2019re too easy to compare fairly.';
+      renderResultsBoard();
+      return;
+    }
     if(hasSharedBackend()&&$('postScore').checked) postScore(run).then(renderResultsBoard);
     else{
       if(!hasSharedBackend()) $('resBoardStatus').textContent=backendNote();
@@ -1040,7 +1045,7 @@
     }
   }
   function entryOf(run){
-    return {n:run.name,s:run.score,d:run.dur,c:run.code,ops:run.practice?'practice':cfgSummary(run.cfg),ts:run.ts,at:run.attempt||1,r:run.replay?1:0};
+    return {n:run.name,s:run.score,d:run.dur,c:run.code,ops:run.practice?'practice':cfgSummary(run.cfg),ts:run.ts,at:run.attempt||1,r:run.replay?1:0,rg:rgOf(run.cfg)};
   }
   function postScore(run){
     if(postedTs[run.ts]) return Promise.resolve();
@@ -1060,6 +1065,18 @@
 
   function typeKey(e){return (e.ops||'?')+' \u00B7 '+e.d+'s';}
   function noPractice(entries){return entries.filter(function(e){return e.ops!=='practice';});}
+  /* Daily-challenge runs share one seed per day, so they live ONLY on the Daily
+     challenge tab — never the all-time or daily-scores boards (replay cheating). */
+  function noDaily(entries){return entries.filter(function(e){return !(e.c&&String(e.c).indexOf('DC.')===0);});}
+  /* Range rule: every enabled op must cover at least the standard ranges
+     (2–100 add/sub, 2–12 × 2–100 mul/div) or the score stays off shared boards. */
+  function boardEligible(cfg){
+    var aOK=cfg.aA0<=2&&cfg.aA1>=100&&cfg.aB0<=2&&cfg.aB1>=100;
+    var mOK=cfg.mA0<=2&&cfg.mA1>=12&&cfg.mB0<=2&&cfg.mB1>=100;
+    var needA=cfg.ops.add||cfg.ops.sub,needM=cfg.ops.mul||cfg.ops.div;
+    return (!needA||aOK)&&(!needM||mOK);
+  }
+  function rgOf(cfg){return [cfg.aA0,cfg.aA1,cfg.aB0,cfg.aB1,cfg.mA0,cfg.mA1,cfg.mB0,cfg.mB1];}
 
   /* ---- Daily challenge: same questions for everyone, new at local midnight ---- */
   var DAILY_CFG={dur:120,ops:{add:true,sub:true,mul:true,div:true},aA0:2,aA1:100,aB0:2,aB1:100,mA0:2,mA1:12,mB0:2,mB1:100};
@@ -1179,7 +1196,7 @@
         return;
       }
       if(boardTab==='today'){
-        pool=dedupeBest(entries.filter(function(e){return e.ts>=startOfToday();}));
+        pool=dedupeBest(noDaily(entries).filter(function(e){return e.ts>=startOfToday();}));
         pool.sort(function(a,b){return b.s-a.s||a.ts-b.ts;});
         body.innerHTML=pool.length?boardRows(pool,-1):'<p class="lb-empty">Nothing scored yet today.</p>';
         status.textContent='Every score set today \u2014 best per player per round type.';
@@ -1190,11 +1207,11 @@
         status.textContent='Total recorded plays per player \u2014 solos, challenges, rooms and daily attempts all count.';
         return;
       }
-      pool=dedupeBest(entries.slice());
+      pool=dedupeBest(noDaily(entries));
       pool.sort(function(a,b){return b.s-a.s||a.ts-b.ts;});
       body.innerHTML=boardRows(pool,-1);
-      renderByType(entries);
-      status.textContent=note+' Showing each player\u2019s best per round type.';
+      renderByType(noDaily(entries));
+      status.textContent=note+' Showing each player\u2019s best per round type. Daily-challenge runs live on their own tab.';
     }
     if(boardTab==='live'){
       $('boardByType').innerHTML='';
@@ -1326,13 +1343,13 @@
   function postAbandon(g){
     if(!g||!g.code||g.code.indexOf('DC.')!==0||!hasSharedBackend()) return;
     backendPost({n:playerName(),s:g.score,d:g.cfg.dur,c:g.code,ops:cfgSummary(g.cfg),
-      ts:Date.now(),at:g.attempt||1,r:(g.attempt||1)>1?1:0,ab:1});
+      ts:Date.now(),at:g.attempt||1,r:(g.attempt||1)>1?1:0,ab:1,rg:rgOf(g.cfg)});
   }
   window.addEventListener('beforeunload',function(){
     if(game&&game.code&&game.code.indexOf('DC.')===0&&Live.server&&navigator.sendBeacon){
       navigator.sendBeacon('/api/result',new Blob([JSON.stringify({
         n:playerName(),s:game.score,d:game.cfg.dur,c:game.code,ops:cfgSummary(game.cfg),
-        ts:Date.now(),at:game.attempt||1,r:(game.attempt||1)>1?1:0,ab:1
+        ts:Date.now(),at:game.attempt||1,r:(game.attempt||1)>1?1:0,ab:1,rg:rgOf(game.cfg)
       })],{type:'text/plain'}));
     }
   });
@@ -1590,6 +1607,7 @@
       ?(isHost?'You\u2019re hosting — start when everyone\u2019s in.':'Waiting for the host to start\u2026')
       :r.state==='live'?'Round '+r.round+' in progress\u2026'
       :'Round '+r.round+' done. '+(isHost?'Start the next when ready.':'Waiting for the host\u2026');
+    if(r.boardable===false) statusLine+=' \u00B7 Ranges below the 2\u2013100 standard \u2014 scores won\u2019t be recorded on the boards.';
     panel.innerHTML=
       '<div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">'+
         '<div><div style="font-family:var(--sans);font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--dim)">Room code</div>'+

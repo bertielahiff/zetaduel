@@ -133,6 +133,36 @@ function opsSummary(cfg) {
   if (cfg.ops.mul) s.push('\u00D7'); if (cfg.ops.div) s.push('\u00F7');
   return s.join(' ');
 }
+/* Scoreboard eligibility: every enabled op's ranges must cover at least the
+   standard (2–100 addition, 2–12 × 2–100 multiplication). Narrower = easier
+   = not comparable, so those scores never reach the shared boards. */
+function cfgEligible(cfg) {
+  const aOK = cfg.aA0 <= 2 && cfg.aA1 >= 100 && cfg.aB0 <= 2 && cfg.aB1 >= 100;
+  const mOK = cfg.mA0 <= 2 && cfg.mA1 >= 12 && cfg.mB0 <= 2 && cfg.mB1 >= 100;
+  const needA = cfg.ops.add || cfg.ops.sub, needM = cfg.ops.mul || cfg.ops.div;
+  return (!needA || aOK) && (!needM || mOK);
+}
+function eligibleFromCode(code) {
+  try {
+    const p = String(code).split('.');
+    if (p[0] !== 'ZD' || p.length !== 12) return false;
+    const mask = parseInt(p[3], 10);
+    const n = p.slice(4).map(x => parseInt(x, 10));
+    return cfgEligible({
+      ops: { add: !!(mask & 1), sub: !!(mask & 2), mul: !!(mask & 4), div: !!(mask & 8) },
+      aA0: n[0], aA1: n[1], aB0: n[2], aB1: n[3], mA0: n[4], mA1: n[5], mB0: n[6], mB1: n[7]
+    });
+  } catch (e) { return false; }
+}
+function eligibleFromRg(b) {
+  if (!Array.isArray(b.rg) || b.rg.length !== 8) return false;
+  const n = b.rg.map(x => parseInt(x, 10));
+  const ops = String(b.ops || '');
+  return cfgEligible({
+    ops: { add: ops.indexOf('+') !== -1, sub: ops.indexOf('\u2212') !== -1, mul: ops.indexOf('\u00D7') !== -1, div: ops.indexOf('\u00F7') !== -1 },
+    aA0: n[0], aA1: n[1], aB0: n[2], aB1: n[3], mA0: n[4], mA1: n[5], mB0: n[6], mB1: n[7]
+  });
+}
 
 /* ---------------- rooms ---------------- */
 const rooms = new Map();   // code -> room
@@ -167,7 +197,7 @@ function roomSnapshot(room) {
     type: 'room',
     code: room.code, state: room.state, hostId: room.hostId,
     cfg: room.cfg, round: room.round, seed: room.seed, startAt: room.startAt,
-    serverNow: Date.now(),
+    serverNow: Date.now(), boardable: cfgEligible(room.cfg),
     players: [...room.players.values()].map(p => ({
       id: p.id, name: p.name, score: p.score, done: p.done, online: p.online, participant: p.participant
     }))
@@ -306,7 +336,7 @@ const server = http.createServer(async (req, res) => {
 
   /* ---- api ---- */
   try {
-    if (p === '/api/ping') return send(res, 200, { ok: true, server: 'zetaduel', now: Date.now(), v: 8, features: ['rooms', 'solowatch', 'daily'] });
+    if (p === '/api/ping') return send(res, 200, { ok: true, server: 'zetaduel', now: Date.now(), v: 9, features: ['rooms', 'solowatch', 'daily'] });
 
     if (p === '/api/leaderboard' && req.method === 'GET') {
       return send(res, 200, { ok: true, entries: board.entries.slice(0, 300) });
@@ -381,7 +411,15 @@ const server = http.createServer(async (req, res) => {
       if (!name) return send(res, 400, { ok: false, error: 'name required' });
       // practice rounds use a personalised question mix — never leaderboard material
       if (String(b.ops || '') === 'practice') return send(res, 200, { ok: true, ignored: true });
-      const code = b.c ? String(b.c).slice(0, 40) : null;
+      const code = b.c ? String(b.c).slice(0, 60) : null;
+      // range rule: ranges must cover at least the 2–100 standard or the score
+      // stays off the shared boards. ZD codes carry their ranges — verified from
+      // the code itself; solos must declare theirs; the daily uses fixed standard.
+      let eligible;
+      if (code && code.indexOf('ZD.') === 0) eligible = eligibleFromCode(code);
+      else if (code && code.indexOf('DC.') === 0) eligible = true;
+      else eligible = eligibleFromRg(b);
+      if (!eligible) return send(res, 200, { ok: true, offboard: true });
       // attempt number is authoritative: counted by NAME + challenge code on the server,
       // so replays can't hide even across devices
       let at = Math.max(1, parseInt(b.at, 10) || 1);
@@ -493,11 +531,14 @@ const server = http.createServer(async (req, res) => {
         if (!pl.done) {
           pl.done = true;
           pl.score = cleanScore(b.score);
-          addEntry({
-            n: pl.name, s: pl.score, d: room.cfg.dur,
-            c: 'RM.' + room.code + '.' + room.round,
-            ops: opsSummary(room.cfg), ts: Date.now(), at: 1, r: 0
-          });
+          // rooms with sub-standard ranges still play fine — scores just aren't recorded
+          if (cfgEligible(room.cfg)) {
+            addEntry({
+              n: pl.name, s: pl.score, d: room.cfg.dur,
+              c: 'RM.' + room.code + '.' + room.round,
+              ops: opsSummary(room.cfg), ts: Date.now(), at: 1, r: 0
+            });
+          }
         }
         touch(room); broadcastRoom(room); maybeEndRound(room);
         return send(res, 200, { ok: true });
