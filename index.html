@@ -1330,6 +1330,7 @@
     fetch('/api/ping').then(function(r){return r.json();}).then(function(d){
       if(d&&d.ok&&d.server==='zetaduel'){
         Live.server=true;
+        Live.features=d.features||[];
         $('liveCard').style.display='block';
         var syncCard=$('syncUrlInput');
         if(syncCard&&syncCard.closest('.card')) syncCard.closest('.card').style.display='none';
@@ -1548,8 +1549,11 @@
     if(Watch.es||!Live.server) return;
     var es=new EventSource('/api/solo/events');
     Watch.es=es;
+    es.onopen=function(){Watch.connected=true;Watch.render();};
+    es.onerror=function(){Watch.connected=false;Watch.render();};
     es.onmessage=function(ev){
       var d;try{d=JSON.parse(ev.data);}catch(e){return;}
+      Watch.connected=true;
       if(d.type==='solos'){
         Watch.sessions=d.list||[];
         Watch.offset=d.serverNow-Date.now();
@@ -1569,9 +1573,15 @@
   Watch.render=function(){
     if(boardTab!=='live') return;
     var body=$('boardBody');
+    if(Live.features&&Live.features.indexOf('solowatch')===-1){
+      body.innerHTML='<p class="lb-empty">This page is newer than the server — update <b>server.js</b> in your GitHub repo to enable live watching.</p>';
+      return;
+    }
     var list=Watch.sessions.slice().sort(function(a,b){return b.score-a.score;});
     if(!list.length){
-      body.innerHTML='<p class="lb-empty">No one is mid-sprint right now. When anyone on this site starts a solo round, they\u2019ll appear here live — score, current question, the lot.</p>';
+      body.innerHTML='<p class="lb-empty">'+(Watch.connected
+        ?'Live feed connected \u2713 — no one is mid-sprint right now. When anyone starts a solo round, they\u2019ll appear here instantly, current question and all.'
+        :'Connecting to the live feed\u2026 if this never connects, refresh the page; if it still won\u2019t, the server may be running an older server.js.')+'</p>';
       return;
     }
     var serverNow=Date.now()+Watch.offset;
@@ -1599,7 +1609,14 @@
     if(!Live.server||g.practice||g.code) return;
     g.soloSid=Live.pid+'.'+Date.now().toString(36);
     fetch('/api/solo/start',{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
-      body:JSON.stringify({sid:g.soloSid,name:playerName(),seed:g.seed,cfg:g.cfg})}).catch(function(){});
+      body:JSON.stringify({sid:g.soloSid,name:playerName(),seed:g.seed,cfg:g.cfg})})
+      .then(function(r){return r.json();})
+      .then(function(d){
+        if(d&&d.ok){
+          if(!Watch.announced){Watch.announced=true;toast('You\u2019re live — colleagues can watch this on the \u201CLive now\u201D tab.');}
+        } else g.soloSid=null;
+      })
+      .catch(function(){g.soloSid=null;});
   };
   Watch.score=function(sid,score){
     fetch('/api/solo/score',{method:'POST',keepalive:true,headers:{'Content-Type':'text/plain;charset=utf-8'},

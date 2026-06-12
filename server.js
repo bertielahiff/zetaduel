@@ -260,7 +260,7 @@ const server = http.createServer(async (req, res) => {
 
   /* ---- api ---- */
   try {
-    if (p === '/api/ping') return send(res, 200, { ok: true, server: 'zetaduel', now: Date.now() });
+    if (p === '/api/ping') return send(res, 200, { ok: true, server: 'zetaduel', now: Date.now(), v: 7, features: ['rooms', 'solowatch'] });
 
     if (p === '/api/leaderboard' && req.method === 'GET') {
       return send(res, 200, { ok: true, entries: board.entries.slice(0, 300) });
@@ -322,7 +322,7 @@ const server = http.createServer(async (req, res) => {
         broadcastSolos(soloSnapshot());
         setTimeout(() => {
           if (solos.delete(s.sid)) broadcastSolos(soloSnapshot());
-        }, 8000).unref();
+        }, 60000).unref();
       }
       return send(res, 200, { ok: true });
     }
