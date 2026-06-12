@@ -178,6 +178,35 @@ setInterval(() => {
   }
 }, 10 * 60 * 1000).unref();
 
+/* ---------------- live solo sessions (spectatable) ---------------- */
+const solos = new Map();          // sid -> {sid,name,score,seed,cfg,startAt,done}
+const soloWatchers = new Set();   // SSE responses on the global watch channel
+const MAX_SOLOS = 60;
+
+function soloSnapshot() {
+  return {
+    type: 'solos', serverNow: Date.now(),
+    list: [...solos.values()].map(s => ({
+      sid: s.sid, name: s.name, score: s.score, seed: s.seed,
+      cfg: s.cfg, startAt: s.startAt, done: s.done
+    }))
+  };
+}
+function broadcastSolos(obj) {
+  const payload = `data: ${JSON.stringify(obj)}\n\n`;
+  for (const res of soloWatchers) {
+    try { res.write(payload); } catch (e) { /* dropped */ }
+  }
+}
+setInterval(() => {
+  const now = Date.now();
+  let changed = false;
+  for (const [k, s] of solos) {
+    if (now > s.startAt + s.cfg.dur * 1000 + 20000) { solos.delete(k); changed = true; }
+  }
+  if (changed) broadcastSolos(soloSnapshot());
+}, 30000).unref();
+
 /* ---------------- http plumbing ---------------- */
 function send(res, status, obj) {
   const body = JSON.stringify(obj);
@@ -237,12 +266,75 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true, entries: board.entries.slice(0, 300) });
     }
 
+    /* ---- live solo watching ---- */
+    if (p === '/api/solo/list' && req.method === 'GET') {
+      return send(res, 200, Object.assign({ ok: true }, soloSnapshot()));
+    }
+    if (p === '/api/solo/events' && req.method === 'GET') {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-store',
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*'
+      });
+      res.write(': connected\n\n');
+      soloWatchers.add(res);
+      res.write(`data: ${JSON.stringify(soloSnapshot())}\n\n`);
+      const hb = setInterval(() => { try { res.write(': hb\n\n'); } catch (e) {} }, 25000);
+      req.on('close', () => { clearInterval(hb); soloWatchers.delete(res); });
+      return;
+    }
+    if (p === '/api/solo/start' && req.method === 'POST') {
+      const b = await readBody(req);
+      const name = cleanName(b.name);
+      if (!name) return send(res, 400, { ok: false, error: 'name required' });
+      const sid = String(b.sid || '').slice(0, 60);
+      if (!sid) return send(res, 400, { ok: false, error: 'no sid' });
+      if (!solos.has(sid) && solos.size >= MAX_SOLOS) {
+        // make room by dropping the oldest finished session, else refuse quietly
+        const old = [...solos.values()].find(s => s.done);
+        if (old) solos.delete(old.sid);
+        else return send(res, 200, { ok: false, error: 'watch list full' });
+      }
+      solos.set(sid, {
+        sid, name, score: 0,
+        seed: (parseInt(b.seed, 10) >>> 0),
+        cfg: cleanCfg(b.cfg),
+        startAt: Date.now(), done: false
+      });
+      broadcastSolos(soloSnapshot());
+      return send(res, 200, { ok: true, sid });
+    }
+    if (p === '/api/solo/score' && req.method === 'POST') {
+      const b = await readBody(req);
+      const s = solos.get(String(b.sid || '').slice(0, 60));
+      if (!s || s.done) return send(res, 409, { ok: false, error: 'not live' });
+      s.score = cleanScore(b.score);
+      broadcastSolos({ type: 'sscore', sid: s.sid, score: s.score });
+      return send(res, 200, { ok: true });
+    }
+    if (p === '/api/solo/finish' && req.method === 'POST') {
+      const b = await readBody(req);
+      const s = solos.get(String(b.sid || '').slice(0, 60));
+      if (s && !s.done) {
+        s.done = true;
+        s.score = cleanScore(b.score);
+        broadcastSolos(soloSnapshot());
+        setTimeout(() => {
+          if (solos.delete(s.sid)) broadcastSolos(soloSnapshot());
+        }, 8000).unref();
+      }
+      return send(res, 200, { ok: true });
+    }
+
     if (p === '/api/result' && req.method === 'POST') {
       const b = await readBody(req);
       const dur = parseInt(b.d, 10);
       if (!DURATIONS.includes(dur)) return send(res, 400, { ok: false, error: 'bad duration' });
       const name = cleanName(b.n);
       if (!name) return send(res, 400, { ok: false, error: 'name required' });
+      // practice rounds use a personalised question mix — never leaderboard material
+      if (String(b.ops || '') === 'practice') return send(res, 200, { ok: true, ignored: true });
       const code = b.c ? String(b.c).slice(0, 40) : null;
       // attempt number is authoritative: counted by NAME + challenge code on the server,
       // so replays can't hide even across devices

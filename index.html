@@ -199,6 +199,21 @@
   .bt-head .bt-cnt{font-family:var(--sans);font-size:10.5px;color:var(--faint);letter-spacing:.08em;margin-left:9px;text-transform:uppercase}
   .spect-note{font-size:12.5px;color:var(--amber);font-style:italic;margin-top:8px}
   .spect-clock{font-family:var(--mono);font-size:13px;color:var(--dim);margin-top:6px}
+  .spect-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;margin:12px 0 4px}
+  .sq-card{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:12px 14px;transition:border-color .15s}
+  .sq-card.lead{border-color:var(--amber)}
+  .sq-card.meplayer{border-color:var(--green-deep)}
+  .sq-card.offline{opacity:.55}
+  .sq-top{display:flex;align-items:baseline;gap:8px}
+  .sq-rank{font-family:var(--mono);font-size:11px;color:var(--faint)}
+  .sq-name{font-size:13.5px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sq-score{font-family:var(--mono);font-weight:700;font-size:19px}
+  .sq-card.lead .sq-score{color:var(--amber)}
+  .sq-card.meplayer .sq-score{color:var(--green)}
+  .sq-q{font-family:var(--mono);font-size:16.5px;margin-top:8px;letter-spacing:.02em;color:var(--ink)}
+  .sq-q .sq-cursor{display:inline-block;width:8px;height:15px;background:var(--green);margin-left:5px;vertical-align:-2px;animation:blink 1.1s steps(1) infinite}
+  .sq-state{font-family:var(--sans);font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);margin-top:8px}
+  .sq-state.fin{color:var(--green)}
 
   #toast{position:fixed;bottom:34px;left:50%;transform:translateX(-50%) translateY(10px);background:#1E2935;border:1px solid var(--line);color:var(--ink);padding:10px 20px;border-radius:999px;font-size:13px;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:100;max-width:84vw}
   #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
@@ -237,7 +252,6 @@
         </div>
         <div class="opt-row">
           <span class="op-name"><label class="switch"><input type="checkbox" id="opSub" checked><span class="slider"></span></label><span class="op-sym">−</span>Subtraction</span>
-          <span class="range-grp" style="color:var(--faint)">addition problems in reverse</span>
         </div>
         <div class="opt-row">
           <span class="op-name"><label class="switch"><input type="checkbox" id="opMul" checked><span class="slider"></span></label><span class="op-sym">×</span>Multiplication</span>
@@ -245,7 +259,6 @@
         </div>
         <div class="opt-row">
           <span class="op-name"><label class="switch"><input type="checkbox" id="opDiv" checked><span class="slider"></span></label><span class="op-sym">÷</span>Division</span>
-          <span class="range-grp" style="color:var(--faint)">multiplication problems in reverse</span>
         </div>
         <label class="f">Round length</label>
         <select class="ti" id="duration">
@@ -289,7 +302,7 @@
       <div class="joinrow" style="margin-top:12px">
         <button class="btn amber" id="btnPractice" style="padding:13px 26px">Start targeted practice</button>
       </div>
-      <p class="note">Uses your current number ranges and round length, but the question mix is weighted toward whatever has been slowing you down. Practice scores are flagged on the boards and don&rsquo;t set personal bests.</p>
+      <p class="note">Uses your current number ranges and round length, but the question mix is weighted toward whatever has been slowing you down. Practice rounds never appear on the leaderboards and don&rsquo;t set personal bests &mdash; they&rsquo;re just for you.</p>
     </div>
 
     <div class="card board-card">
@@ -308,6 +321,7 @@
         <button class="btab active" data-tab="all">All scores</button>
         <button class="btab" data-tab="challenge">This challenge</button>
         <button class="btab" data-tab="session">This session</button>
+        <button class="btab" data-tab="live">Live now</button>
       </div>
       <div id="boardBody"></div>
       <div id="boardByType"></div>
@@ -809,6 +823,7 @@
       $('answer').value='';
       $('answer').focus();
       game.interval=setInterval(tick,100);
+      Watch.register(game);
     };
     if(opts&&opts.syncAt) beginAt(opts.syncAt,go);
     else countdown(go);
@@ -876,12 +891,14 @@
       this.classList.remove('flash');void this.offsetWidth;this.classList.add('flash');
       blip(740+Math.min(game.score*4,260),0.07,0.05);
       if(game.live){Live.sendScore(game.score);updateLiveBar();}
+      if(game.soloSid) Watch.score(game.soloSid,game.score);
       nextQuestion();
     }
   });
   $('btnQuit').addEventListener('click',function(){
     if(game&&confirm('Abandon this round? The score won\u2019t count.')){
       if(game.live) Live.finish(game.score);
+      if(game.soloSid) Watch.finish(game.soloSid,game.score);
       clearInterval(game.interval);game=null;
       updateLiveBar();
       show('screen-lobby');renderBoard();
@@ -898,6 +915,7 @@
       replay:g.replay,attempt:g.attempt||1,practice:g.practice,live:g.live,times:g.times,log:g.log,opCounts:g.opCounts,seen:g.seen,ts:Date.now()
     };
     if(g.live) Live.finish(g.score);
+    if(g.soloSid) Watch.finish(g.soloSid,g.score);
     if(g.code){
       playedThisSession[g.code]=true;
       if(me.played.indexOf(g.code)===-1){me.played.push(g.code);if(me.played.length>200)me.played=me.played.slice(-200);}
@@ -916,7 +934,7 @@
     var isPB=g.score>(me.best||0)&&!g.replay&&!g.practice;
     if(isPB) me.best=g.score;
     saveMe(me);
-    sessionBoard.push({n:me.name,s:g.score,d:g.cfg.dur,c:g.code,ops:g.practice?'practice':cfgSummary(g.cfg),ts:Date.now(),at:g.attempt||1,r:g.replay?1:0});
+    if(!g.practice) sessionBoard.push({n:me.name,s:g.score,d:g.cfg.dur,c:g.code,ops:cfgSummary(g.cfg),ts:Date.now(),at:g.attempt||1,r:g.replay?1:0});
 
     // Results screen
     $('resScore').textContent=g.score;
@@ -939,7 +957,7 @@
       return '<div class="stat-chip"><div class="v">'+esc(String(c.v))+'</div><div class="k">'+c.k+'</div></div>';
     }).join('');
     $('btnShareRes').style.display=(g.code&&!g.live)?'block':'none';
-    $('postRow').style.display=(hasSharedBackend()&&!g.live)?'flex':'none';
+    $('postRow').style.display=(hasSharedBackend()&&!g.live&&!g.practice)?'flex':'none';
     revSort='order';
     document.querySelectorAll('#revTabs .btab').forEach(function(x){x.classList.toggle('active',x.dataset.rev==='order');});
     renderReview();
@@ -985,6 +1003,11 @@
   var postedTs={};
   function maybePostAndRenderResults(){
     var run=lastRun;
+    if(run.practice){
+      $('resBoardStatus').textContent='Practice rounds aren\u2019t recorded on the leaderboard — they\u2019re just for you. Here\u2019s the regular solo board for context.';
+      renderResultsBoard();
+      return;
+    }
     if(run.live){
       $('resBoardStatus').textContent='Recorded on the server automatically — this is a live round.';
       renderResRoomLive();
@@ -1017,6 +1040,7 @@
   });
 
   function typeKey(e){return (e.ops||'?')+' \u00B7 '+e.d+'s';}
+  function noPractice(entries){return entries.filter(function(e){return e.ops!=='practice';});}
   /* best score per NAME per round type — names are uppercase everywhere */
   function dedupeBest(entries,sameType){
     var best={};
@@ -1078,8 +1102,8 @@
     var run=lastRun;
     var target=$('resBoard');
     function pick(entries){
-      var merged=entries.slice();
-      if(!merged.some(function(e){return e.ts===run.ts;})) merged.push(entryOf(run));
+      var merged=noPractice(entries.slice());
+      if(!run.practice&&!merged.some(function(e){return e.ts===run.ts;})) merged.push(entryOf(run));
       var pool=run.code?merged.filter(function(e){return e.c===run.code;}):merged.filter(function(e){return !e.c&&e.d===run.dur;});
       pool=withTries(pool);
       pool.sort(function(a,b){return b.s-a.s||a.ts-b.ts;});
@@ -1101,6 +1125,7 @@
     renderPractice();
     var body=$('boardBody'),status=$('boardStatus');
     function draw(entries,note){
+      entries=noPractice(entries);
       var pool=entries.slice();
       if(boardTab==='challenge'){
         var code=$('joinCode').value.trim()||($('codeText').textContent||'').trim();
@@ -1118,6 +1143,20 @@
       renderByType(entries);
       status.textContent=note+' Showing each player\u2019s best per round type.';
     }
+    if(boardTab==='live'){
+      $('boardByType').innerHTML='';
+      if(!Live.server){
+        Watch.close();
+        body.innerHTML='<p class="lb-empty">Live watching needs the game server — it works on your deployed website.</p>';
+        status.textContent='';
+        return;
+      }
+      Watch.open();
+      Watch.render();
+      status.textContent='Anyone running a solo sprint appears here in real time, current question and all. Practice and challenge runs stay private.';
+      return;
+    }
+    Watch.close();
     if(boardTab==='session'){draw(sessionBoard,'Scores from this browser session.');return;}
     if(hasSharedBackend()){
       body.innerHTML='<p class="lb-empty">Loading the shared board…</p>';
@@ -1265,6 +1304,24 @@
   /* ============ Live rooms (server mode) ============ */
   var Live={server:false,pid:'p'+Math.random().toString(36).slice(2,10)+Date.now().toString(36),
             room:null,es:null,offset:0,lastLaunched:0,retryT:null};
+  /* Spectators regenerate question sequences locally from the shared seed — a
+     player's score IS their position, so score N means they're on question N.
+     No answers are shown: that keeps a second tab useless for cheating.
+     Multi-seed cache: several solo sessions + a room can be watched at once. */
+  var qSeqCaches={order:[],map:{}};
+  function seqQuestion(seed,cfg,idx){
+    var key=seed+'|'+JSON.stringify(cfg);
+    var c=qSeqCaches.map[key];
+    if(!c){
+      c={rng:mulberry32(seed),list:[]};
+      qSeqCaches.map[key]=c;
+      qSeqCaches.order.push(key);
+      if(qSeqCaches.order.length>12) delete qSeqCaches.map[qSeqCaches.order.shift()];
+    }
+    while(c.list.length<=idx) c.list.push(genQuestion(c.rng,cfg));
+    return c.list[idx];
+  }
+  function roomQuestion(seed,cfg,idx){return seqQuestion(seed,cfg,idx);}
   function liveApi(path,body){
     return fetch(path,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body||{})})
       .then(function(r){return r.json();});
@@ -1385,20 +1442,33 @@
       var ps=r.players.filter(function(p){return p.participant;}).slice()
         .sort(function(a,b){return b.score-a.score;});
       var top=ps.length?ps[0].score:0;
-      roster=ps.map(function(p,i){
-        return '<span class="lp'+(p.online?' on':'')+(p.id===Live.pid?' meplayer':'')+'">'+
-          '<span class="dotp"></span>'+(i+1)+'. '+esc(p.name)+
-          ' <b style="font-family:var(--mono);margin-left:3px;'+(p.score===top&&top>0?'color:var(--amber)':'')+'">'+p.score+'</b>'+
-          (p.done?' \u2713':'')+'</span>';
-      }).join('');
+      var started=(Date.now()+Live.offset)>=r.startAt;
+      roster='<div class="spect-grid">'+ps.map(function(p,i){
+        var cls=(p.score===top&&top>0?' lead':'')+(p.id===Live.pid?' meplayer':'')+(!p.online&&!p.done?' offline':'');
+        var middle;
+        if(p.done){
+          middle='<div class="sq-state fin">\u2713 finished</div>';
+        } else if(!started){
+          middle='<div class="sq-state">on the start line\u2026</div>';
+        } else {
+          var q=roomQuestion(r.seed,r.cfg,p.score);
+          middle='<div class="sq-q">'+esc(q.text)+' = <span class="sq-cursor"></span></div>'+
+                 (!p.online?'<div class="sq-state">connection lost</div>':'');
+        }
+        return '<div class="sq-card'+cls+'">'+
+          '<div class="sq-top"><span class="sq-rank">'+(i+1)+'</span>'+
+          '<span class="sq-name">'+esc(p.name)+'</span>'+
+          '<span class="sq-score">'+p.score+'</span></div>'+
+          middle+'</div>';
+      }).join('')+'</div>';
     } else {
-      roster=r.players.map(function(p){
+      roster='<div class="live-roster">'+r.players.map(function(p){
         return '<span class="lp'+(p.online?' on':'')+(p.id===Live.pid?' meplayer':'')+'">'+
           '<span class="dotp"></span>'+esc(p.name)+
           (p.id===r.hostId?' <span class="crown">\u2605</span>':'')+
           (r.state==='done'&&p.participant?' <b style="font-family:var(--mono);margin-left:3px">'+p.score+'</b>':'')+
           (p.done?' \u2713':'')+'</span>';
-      }).join('');
+      }).join('')+'</div>';
     }
     var statusLine=r.state==='lobby'
       ?(isHost?'You\u2019re hosting — start when everyone\u2019s in.':'Waiting for the host to start\u2026')
@@ -1410,8 +1480,8 @@
         '<div class="roomcode-big">'+r.code+'</div></div>'+
         '<div class="note" style="margin:0;flex:1;min-width:200px">'+cfgSummary(r.cfg)+' \u00B7 '+r.cfg.dur+'s \u00B7 '+esc(statusLine)+'</div>'+
       '</div>'+
-      '<div class="live-roster">'+roster+'</div>'+
-      (spectating?'<div class="spect-note">Spectating live — scores update as they type. You\u2019ll be in from the next round.</div>':'')+
+      roster+
+      (spectating?'<div class="spect-note">Spectating live — you\u2019re watching the exact question on each player\u2019s screen. You\u2019ll be in from the next round.</div>':'')+
       (r.state==='live'?'<div class="spect-clock" id="roomLiveClock"></div>':'')+
       '<div class="joinrow" style="margin-top:8px">'+
         (isHost&&r.state!=='live'?'<button class="btn amber" id="btnRoomStart" style="padding:11px 22px">'+(r.round>0?'Start round '+(r.round+1):'Start round')+'</button>':'')+
@@ -1426,6 +1496,7 @@
   };
   Live.ensureClock=function(){
     if(Live.clockT) return;
+    Live.wasStarted=false;
     Live.clockT=setInterval(function(){
       var el=$('roomLiveClock');
       var r=Live.room;
@@ -1434,6 +1505,7 @@
       if(serverNow<r.startAt){
         el.textContent='Starting in '+Math.ceil((r.startAt-serverNow)/1000)+'\u2026';
       } else {
+        if(!Live.wasStarted){Live.wasStarted=true;if(!game)Live.renderPanel();return;}
         var rem=Math.max(0,Math.ceil((r.startAt+r.cfg.dur*1000-serverNow)/1000));
         el.textContent=rem>0?rem+'s left in the round':'Waiting for the last finishers\u2026';
       }
@@ -1469,6 +1541,74 @@
   $('btnRoomCreate').addEventListener('click',Live.create);
   $('btnRoomJoin').addEventListener('click',function(){Live.join($('roomJoinCode').value);});
   $('roomJoinCode').addEventListener('keydown',function(e){if(e.key==='Enter')Live.join(this.value);});
+
+  /* ============ Watch: live solo spectating ============ */
+  var Watch={es:null,sessions:[],offset:0,tick:null};
+  Watch.open=function(){
+    if(Watch.es||!Live.server) return;
+    var es=new EventSource('/api/solo/events');
+    Watch.es=es;
+    es.onmessage=function(ev){
+      var d;try{d=JSON.parse(ev.data);}catch(e){return;}
+      if(d.type==='solos'){
+        Watch.sessions=d.list||[];
+        Watch.offset=d.serverNow-Date.now();
+        Watch.render();
+      } else if(d.type==='sscore'){
+        var s=Watch.sessions.find(function(x){return x.sid===d.sid;});
+        if(s) s.score=d.score;
+        Watch.render();
+      }
+    };
+    Watch.tick=setInterval(Watch.render,1000);
+  };
+  Watch.close=function(){
+    if(Watch.es){Watch.es.close();Watch.es=null;}
+    clearInterval(Watch.tick);Watch.tick=null;
+  };
+  Watch.render=function(){
+    if(boardTab!=='live') return;
+    var body=$('boardBody');
+    var list=Watch.sessions.slice().sort(function(a,b){return b.score-a.score;});
+    if(!list.length){
+      body.innerHTML='<p class="lb-empty">No one is mid-sprint right now. When anyone on this site starts a solo round, they\u2019ll appear here live — score, current question, the lot.</p>';
+      return;
+    }
+    var serverNow=Date.now()+Watch.offset;
+    body.innerHTML='<div class="spect-grid">'+list.map(function(s){
+      var rem=Math.max(0,Math.ceil((s.startAt+s.cfg.dur*1000-serverNow)/1000));
+      var middle;
+      if(s.done){
+        middle='<div class="sq-state fin">\u2713 finished</div>';
+      } else if(rem<=0){
+        middle='<div class="sq-state">wrapping up\u2026</div>';
+      } else {
+        var q=seqQuestion(s.seed,s.cfg,s.score);
+        middle='<div class="sq-q">'+esc(q.text)+' = <span class="sq-cursor"></span></div>'+
+               '<div class="sq-state">'+rem+'s left \u00B7 '+cfgSummary(s.cfg)+' \u00B7 '+s.cfg.dur+'s solo</div>';
+      }
+      return '<div class="sq-card'+(s.done?'':'')+'">'+
+        '<div class="sq-top"><span class="sq-name">'+esc(s.name)+'</span>'+
+        '<span class="sq-score">'+s.score+'</span></div>'+
+        middle+'</div>';
+    }).join('')+'</div>';
+  };
+  /* Player side: register pure solo rounds (never practice, never challenge codes —
+     challenge seeds are shared, so previewing their questions would be a cheat) */
+  Watch.register=function(g){
+    if(!Live.server||g.practice||g.code) return;
+    g.soloSid=Live.pid+'.'+Date.now().toString(36);
+    fetch('/api/solo/start',{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body:JSON.stringify({sid:g.soloSid,name:playerName(),seed:g.seed,cfg:g.cfg})}).catch(function(){});
+  };
+  Watch.score=function(sid,score){
+    fetch('/api/solo/score',{method:'POST',keepalive:true,headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body:JSON.stringify({sid:sid,score:score})}).catch(function(){});
+  };
+  Watch.finish=function(sid,score){
+    fetch('/api/solo/finish',{method:'POST',keepalive:true,headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body:JSON.stringify({sid:sid,score:score})}).catch(function(){});
+  };
 
   applySyncFromHash();
   renderBoard();
