@@ -136,6 +136,11 @@
   #countOverlay{position:fixed;inset:0;background:rgba(13,17,23,.92);display:none;align-items:center;justify-content:center;z-index:60}
   #countOverlay.show{display:flex}
   #countNum{font-family:var(--mono);font-size:120px;font-weight:700;color:var(--green);animation:pop .35s ease}
+  #countHint{display:none;font-family:var(--sans);font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);margin-top:14px}
+  @media (pointer:coarse){
+    #countHint{display:block}
+    #answer{width:min(420px,86vw);padding:10px 0}
+  }
   @keyframes pop{from{transform:scale(1.6);opacity:0}to{transform:scale(1);opacity:1}}
 
   /* ===== Results ===== */
@@ -378,7 +383,7 @@
   </section>
 </div>
 
-<div id="countOverlay"><div id="countNum">3</div></div>
+<div id="countOverlay"><div style="text-align:center"><div id="countNum">3</div><div id="countHint">tap to ready your keyboard</div></div></div>
 <div id="toast" role="status"></div>
 
 <script>
@@ -817,6 +822,10 @@
       ' &middot; '+(prof?prof.ops.map(function(o){return OP_SYM[o];}).join(' '):cfgSummary(cfg))+' &middot; '+cfg.dur+'s'+(attempt>1?' &middot; ATTEMPT '+attempt:'');
     show('screen-game');
     updateLiveBar();
+    // Mobile: the soft keyboard only opens if focus happens inside the user's tap.
+    // Focus NOW (synchronously, gesture still live) and the keyboard survives the countdown.
+    $('answer').value='';
+    $('answer').focus();
     var go=function(){
       game.endsAt=Date.now()+cfg.dur*1000;
       nextQuestion();
@@ -1299,6 +1308,13 @@
       $('answer').focus();
     }
     if(e.key==='Escape'&&game) $('btnQuit').click();
+  });
+  // Mobile: any tap on the countdown or the game screen opens/keeps the keyboard
+  $('countOverlay').addEventListener('pointerdown',function(){
+    if(game) $('answer').focus();
+  });
+  $('screen-game').addEventListener('pointerdown',function(e){
+    if(game&&e.target.id!=='btnQuit') $('answer').focus();
   });
 
   /* ============ Live rooms (server mode) ============ */
